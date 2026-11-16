@@ -39,7 +39,34 @@ async function req(path,options={}){const r=await fetch(`${API}${path}`,options)
 async function login(email,password){return await req('/auth/v1/token?grant_type=password',{method:'POST',headers:{'apikey':KEY,'Content-Type':'application/json'},body:JSON.stringify({email,password})})}
 async function ensureToken(){if(!session)throw Error('로그인이 필요합니다.');if(session.expires_at&&Date.now()/1000<session.expires_at-50)return session.access_token;
 const s=await req('/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:{'apikey':KEY,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});session=s;saveSession();return session.access_token}
-async function getSummary(){let token=await ensureToken();return await req('/rest/v1/rpc/svt_song_vote_admin_round_summary',{method:'POST',headers:{apikey:KEY,Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}'})}
+async function getSummary(){
+  const token=await ensureToken();
+  const headers={apikey:KEY,Authorization:`Bearer ${token}`,'Content-Type':'application/json'};
+  const modern=await req('/rest/v1/rpc/svt_song_vote_admin_round_summary',{method:'POST',headers,body:'{}'});
+  // Earlier submissions exist in the original final-ballots table. The legacy
+  // admin RPC independently aggregates that table, so use it to recover 5R
+  // display if the newer round-summary response omits the final round.
+  const legacyMissing=order.some(k=>!(modern.rounds||[]).some(v=>v.category===k&&Number(v.round)===5&&Array.isArray(v.songs)&&v.songs.length));
+  modern.finalRoundFallbackError='';
+  if(legacyMissing){
+    try{
+      const old=await req('/rest/v1/rpc/svt_song_vote_admin_summary',{method:'POST',headers,body:'{}'});
+      const rounds=Array.isArray(modern.rounds)?modern.rounds.slice():[];
+      for(const k of order){
+        const oldCat=(old.categories||[]).find(v=>v.key===k);
+        if(!oldCat||!Array.isArray(oldCat.songs)||!oldCat.songs.length)continue;
+        const ix=rounds.findIndex(v=>v.category===k&&Number(v.round)===5);
+        const current=ix>=0?rounds[ix]:null;
+        if(current&&Array.isArray(current.songs)&&current.songs.length)continue;
+        const normalized={category:k,round:5,ballots:Number(oldCat.total)||0,total_picks:Number(oldCat.total)||0,
+          songs:oldCat.songs.map(v=>({song:v.song,votes:Number(v.votes)||0}))};
+        if(ix>=0)rounds[ix]=normalized;else rounds.push(normalized);
+      }
+      modern.rounds=rounds;
+    }catch(e){modern.finalRoundFallbackError=e.message||String(e)}
+  }
+  return modern;
+}
 function text(s){return document.createTextNode(String(s??''))}
 function comma(n){return Number(n||0).toLocaleString('ko-KR')}
 function stamp(v){return v?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'기록 없음'}
@@ -50,12 +77,12 @@ $('tabs').replaceChildren();for(const k of order){const b=document.createElement
 renderRoundTabs();renderRanks();renderDaily()}
 function renderTabs(){for(const b of $('tabs').children){const on=b.dataset.category===current;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on))}}
 function renderRoundTabs(){$('roundTabs').replaceChildren();for(let r=1;r<=5;r++){const b=document.createElement('button');b.textContent=r+'라운드';b.classList.toggle('active',currentRound===r);b.setAttribute('aria-pressed',String(currentRound===r));b.onclick=()=>{currentRound=r;renderRoundTabs();renderRanks()};$('roundTabs').append(b)}}
-function renderRanks(){const cat=getCategory(current),needle=$('filter').value.trim().toLocaleLowerCase(),items=(cat.songs||[]).filter(v=>String(v.song).toLocaleLowerCase().includes(needle));$('rankings').replaceChildren();$('empty').classList.toggle('hidden',items.length!==0);$('roundStats').textContent=`${labels[current]} · ${currentRound}라운드 · 참여 투표 ${comma(cat.ballots)}건 · 총 선택 ${comma(cat.total_picks)}표`; 
+function renderRanks(){const cat=getCategory(current),needle=$('filter').value.trim().toLocaleLowerCase(),items=(cat.songs||[]).filter(v=>String(v.song).toLocaleLowerCase().includes(needle));$('rankings').replaceChildren();$('empty').classList.toggle('hidden',items.length!==0);$('roundStats').textContent=`${labels[current]} · ${currentRound}라운드 · 참여 투표 ${comma(cat.ballots)}건 · 총 획득표 ${comma(cat.total_picks)}표`; 
 let previousVotes=null,rank=0,position=0;const all=cat.songs||[];let ranks=new Map();for(const s of all){position++;if(Number(s.votes)!==previousVotes){rank=position;previousVotes=Number(s.votes)}ranks.set(s.song,rank)}
-for(const s of items){const tr=document.createElement('tr');const r=document.createElement('td');r.textContent=String(ranks.get(s.song));const name=document.createElement('td');name.className='song';name.append(text(s.song));const meter=document.createElement('div');meter.className='meter';const fill=document.createElement('div');fill.className='fill';fill.style.width=`${cat.ballots?Math.min(100,100*Number(s.votes)/Number(cat.ballots)):0}%`;meter.append(fill);name.append(meter);const votes=document.createElement('td');votes.className='number';votes.textContent=comma(s.votes);const percent=document.createElement('td');percent.className='number';percent.textContent=`${cat.ballots?(100*Number(s.votes)/Number(cat.ballots)).toFixed(1):'0.0'}%`;tr.append(r,name,votes,percent);$('rankings').append(tr)}}
+for(const s of items){const tr=document.createElement('tr');const r=document.createElement('td');r.textContent=String(ranks.get(s.song));const name=document.createElement('td');name.className='song';name.append(text(s.song));const meter=document.createElement('div');meter.className='meter';const fill=document.createElement('div');fill.className='fill';fill.style.width=`${cat.ballots?Math.min(100,100*Number(s.votes)/Number(cat.ballots)):0}%`;meter.append(fill);name.append(meter);const votes=document.createElement('td');votes.className='number';votes.textContent=comma(s.votes)+'표';const percent=document.createElement('td');percent.className='number';percent.textContent=`${cat.ballots?(100*Number(s.votes)/Number(cat.ballots)).toFixed(1):'0.0'}%`;tr.append(r,name,votes,percent);$('rankings').append(tr)}}
 function renderDaily(){const dates=[];const byDay=new Map((summary.daily||[]).map(v=>[v.date,Number(v.votes)||0]));for(let i=29;i>=0;i--){const date=new Date();date.setUTCHours(3,0,0,0);date.setUTCDate(date.getUTCDate()-i);const str=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);dates.push([str,byDay.get(str)||0])}
 let max=Math.max(1,...dates.map(d=>d[1]));$('dailyChart').replaceChildren();for(const [date,v] of dates){const barContainer=document.createElement('div');barContainer.className='bar-container';barContainer.title=`${date}: ${comma(v)}건`;const bar=document.createElement('div');bar.className='bar';bar.style.height=`${Math.max(v?2:0,100*v/max)}%`;barContainer.append(bar);$('dailyChart').append(barContainer)}$('dailyLegend').textContent='';const a=document.createElement('span'),b=document.createElement('span');a.textContent=dates[0][0];b.textContent=dates[dates.length-1][0];$('dailyLegend').append(a,b)}
-async function refresh(){if(refreshing||!session)return;refreshing=true;$('refresh').disabled=true;message('dashboardNotice','집계 중...');try{summary=await getSummary();render();message('dashboardNotice',`최근 조회: ${new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}`)}catch(e){message('dashboardNotice',`결과를 불러오지 못했습니다: ${e.message}`,true);if(/Admin access required|JWT|token|403|401|permission denied/i.test(e.message)){summary=null;setLoggedIn(false);message('loginNotice','관리자 권한이 없거나 로그인이 만료됐습니다. 관리자 계정 등록 및 SQL 설정을 확인해 주세요.',true)}}finally{refreshing=false;$('refresh').disabled=false}}
+async function refresh(){if(refreshing||!session)return;refreshing=true;$('refresh').disabled=true;message('dashboardNotice','집계 중...');try{summary=await getSummary();render();message('dashboardNotice',`최근 조회: ${new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}`+(summary.finalRoundFallbackError?' · 5라운드 보조 집계 확인 실패: '+summary.finalRoundFallbackError:''),Boolean(summary.finalRoundFallbackError))}catch(e){message('dashboardNotice',`결과를 불러오지 못했습니다: ${e.message}`,true);if(/Admin access required|JWT|token|403|401|permission denied/i.test(e.message)){summary=null;setLoggedIn(false);message('loginNotice','관리자 권한이 없거나 로그인이 만료됐습니다. 관리자 계정 등록 및 SQL 설정을 확인해 주세요.',true)}}finally{refreshing=false;$('refresh').disabled=false}}
 $('loginForm').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;message('loginNotice','로그인 중...');try{session=await login($('email').value.trim(),$('password').value);saveSession();$('password').value='';setLoggedIn(true);message('loginNotice','');await refresh()}catch(err){session=null;saveSession();message('loginNotice',`로그인 실패: ${err.message}`,true)}finally{$('loginButton').disabled=false}};
 $('refresh').onclick=refresh;
 $('filter').oninput=renderRanks;
