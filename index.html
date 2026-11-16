@@ -65,6 +65,9 @@ button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;touch
 }
 @media(max-width:359px){.header,.content,.footer{padding-left:7%;padding-right:7%}.brand-title{font-size:24px}.section-tab{font-size:19px}.section-status span{font-size:10px}.bottom-button{font-size:12px}}
 @media(max-height:670px){.brand{padding-top:24px}.vote-info{margin-top:27px}.progress-block{margin-top:17px;padding-bottom:17px}.header.result-header{padding-bottom:28px}.content{padding-top:25px}.footer{min-height:73px;padding-top:11px}}
+/* English-only selection buttons: a little wider and smaller for Select / Cancel. */
+html[lang="en"] .pick-btn{flex:0 0 72px;font-size:14px;letter-spacing:-.02em;padding:0 4px}
+@media(min-width:768px){html[lang="en"] .pick-btn{flex-basis:90px;font-size:15px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 </style></head>
 <body><div id="app" class="app" aria-live="polite"></div>
